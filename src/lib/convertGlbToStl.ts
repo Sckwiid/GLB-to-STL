@@ -1,4 +1,4 @@
-import { Group, Mesh } from "three";
+import { BufferAttribute, BufferGeometry, Group, Mesh, Vector3 } from "three";
 import type { GLTF } from "three/examples/jsm/loaders/GLTFLoader.js";
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
 import { DRACOLoader } from "three/examples/jsm/loaders/DRACOLoader.js";
@@ -183,8 +183,7 @@ function createBakeTransformedScene(gltf: GLTF): Group {
       return;
     }
 
-    const geometry = mesh.geometry.clone();
-    geometry.applyMatrix4(mesh.matrixWorld);
+    const geometry = createFloat32TriangleGeometry(mesh);
     geometry.computeVertexNormals();
     exportRoot.add(new Mesh(geometry));
     meshCount += 1;
@@ -200,6 +199,49 @@ function createBakeTransformedScene(gltf: GLTF): Group {
 
   exportRoot.updateMatrixWorld(true);
   return exportRoot;
+}
+
+function createFloat32TriangleGeometry(mesh: Mesh): BufferGeometry {
+  const sourceGeometry = mesh.geometry;
+  const position = sourceGeometry.getAttribute("position");
+  const index = sourceGeometry.index;
+  const maxCount = index ? index.count : position.count;
+  const rangeStart = sourceGeometry.drawRange.start || 0;
+  const rangeCount = Number.isFinite(sourceGeometry.drawRange.count)
+    ? sourceGeometry.drawRange.count
+    : maxCount - rangeStart;
+  const rangeEnd = Math.min(maxCount, rangeStart + rangeCount);
+  const triangleCount = Math.floor((rangeEnd - rangeStart) / 3);
+  const vertices = new Float32Array(triangleCount * 9);
+  const vertex = new Vector3();
+  const skinnedMesh = mesh as Mesh & {
+    isSkinnedMesh?: boolean;
+    applyBoneTransform?: (index: number, target: Vector3) => Vector3;
+  };
+
+  let offset = 0;
+
+  for (let cursor = rangeStart; cursor < rangeStart + triangleCount * 3; cursor += 1) {
+    const vertexIndex = index ? index.getX(cursor) : cursor;
+
+    vertex.fromBufferAttribute(position, vertexIndex);
+
+    if (skinnedMesh.isSkinnedMesh && skinnedMesh.applyBoneTransform) {
+      skinnedMesh.applyBoneTransform(vertexIndex, vertex);
+    }
+
+    vertex.applyMatrix4(mesh.matrixWorld);
+
+    vertices[offset] = vertex.x;
+    vertices[offset + 1] = vertex.y;
+    vertices[offset + 2] = vertex.z;
+    offset += 3;
+  }
+
+  const geometry = new BufferGeometry();
+  geometry.setAttribute("position", new BufferAttribute(vertices, 3));
+
+  return geometry;
 }
 
 function exportSceneToStl(exportScene: Group): string | ArrayBuffer | DataView {
